@@ -1,0 +1,7 @@
+spring:
+  application:
+     name=oauth
+
+logging:
+   level:
+      org.springframework.security: trace
