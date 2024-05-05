@@ -10,7 +10,7 @@ version = '0.0.1-SNAPSHOT'
 java {
 	sourceCompatibility = '21'
 }
-
+1
 repositories {
 	mavenCentral()
 }
@@ -18,6 +18,10 @@ repositories {
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-oauth2-authorization-server'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.session:spring-session-jdbc'
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	implementation 'org.postgresql:postgresql'
+	implementation 'org.flywaydb:flyway-core'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 

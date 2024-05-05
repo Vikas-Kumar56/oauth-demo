@@ -2,6 +2,21 @@ spring:
   application:
      name=oauth
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/oauthdb
+    username: postgres
+    password: test
+    platform: postgres
+    hikari:
+      connection-test-query: SELECT 1
+
+  jpa:
+    database: POSTGRESQL
+    show-sql: true
+    generate-ddl: auto
+    hibernate:
+      ddl-auto: validate
+
 logging:
    level:
       org.springframework.security: trace
