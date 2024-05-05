@@ -5,21 +5,19 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
-import io.micrometer.common.lang.Nullable;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
+import org.springframework.lang.Nullable;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.Transient;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -31,8 +29,6 @@ import org.springframework.security.oauth2.core.oidc.OidcScopes;
 import org.springframework.security.oauth2.core.oidc.endpoint.OidcParameterNames;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
-import org.springframework.security.oauth2.server.authorization.InMemoryOAuth2AuthorizationService;
-import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.client.InMemoryRegisteredClientRepository;
@@ -48,7 +44,6 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationConverter;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
-import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import java.security.KeyPair;
@@ -56,127 +51,104 @@ import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
-import java.util.Base64;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 @EnableWebSecurity
 @Configuration
 public class SecurityConfig {
 
-    // step 1
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity httpSecurity, RegisteredClientRepository registeredClientRepository) throws Exception {
+    public SecurityFilterChain authorizationServerSecurityChain(HttpSecurity httpSecurity, RegisteredClientRepository registeredClientRepository) throws Exception {
         OAuth2AuthorizationServerConfiguration.applyDefaultSecurity(httpSecurity);
+
         httpSecurity.getConfigurer(OAuth2AuthorizationServerConfigurer.class)
-                .clientAuthentication(clientAuthentication -> clientAuthentication
-                        .authenticationConverter(
-                                new PublicClientRefreshTokenAuthenticationConverter())
-                        .authenticationProvider(
-                                new PublicClientRefreshTokenAuthenticationProvider(registeredClientRepository)))
+                .clientAuthentication(authentication -> {
+                    authentication.authenticationConverter(new PublicClientRefreshTokenAuthenticationConverter());
+                    authentication.authenticationProvider(new PublicClientRefreshProvider(registeredClientRepository));
+                })
                 .tokenGenerator(tokenGenerator())
-                .oidc(Customizer.withDefaults()); // Enable OpenID Connect 1.0
+                .oidc(Customizer.withDefaults()); // enable open id connect 1.0
 
-        httpSecurity
-                .exceptionHandling(exception -> {
-                    // Redirect to the login page when not authenticated from the
-                    // authorization endpoint
-                    exception.defaultAuthenticationEntryPointFor(
-                            new LoginUrlAuthenticationEntryPoint("/login"),
-                            new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
-                    );
-                });
-//                // Accept access tokens for User Info and/or Client Registration
-//                .oauth2ResourceServer((resourceServer) -> resourceServer
-//                        .jwt(Customizer.withDefaults()));
+        httpSecurity.exceptionHandling(exception -> {
+            exception.defaultAuthenticationEntryPointFor(
+                    new LoginUrlAuthenticationEntryPoint("/login"),
+                    new MediaTypeRequestMatcher((MediaType.TEXT_HTML))
+            );
+        });
 
+        httpSecurity.oauth2ResourceServer(server -> {
+            server.jwt(Customizer.withDefaults());
+        });
 
         return httpSecurity.build();
     }
 
-    @Bean
-    @Order(2) // add a new filter chain specially for resource server endpoints
-    public SecurityFilterChain resourceServerFilterChain(HttpSecurity http) throws Exception {
-        return http
-                .securityMatcher("/api/**")
-                .authorizeHttpRequests(authorizeRequests -> authorizeRequests
-                        .anyRequest().authenticated())
-                .csrf(AbstractHttpConfigurer::disable)
-                .oauth2ResourceServer((resourceServer) -> resourceServer
-                        .jwt(Customizer.withDefaults()))
-                .build();
-    }
 
     @Bean
-    @Order(3)
+    @Order(2)
     public SecurityFilterChain defaultSecurityChain(HttpSecurity httpSecurity) throws Exception {
-          httpSecurity.authorizeHttpRequests(
-                        authorize -> authorize.anyRequest().authenticated()
-                )
-                // Form login handles the redirect to the login page from the
-                // authorization server filter chain
-                .formLogin(Customizer.withDefaults());
+        httpSecurity.authorizeHttpRequests(
+                authorize -> authorize.anyRequest().authenticated()
+        ).formLogin(Customizer.withDefaults());
 
         return httpSecurity.build();
     }
 
     @Bean
     public UserDetailsService userDetailsService() {
-        UserDetails userDetails = User.withDefaultPasswordEncoder()
+        UserDetails users = User.withDefaultPasswordEncoder()
                 .username("user")
                 .password("password")
                 .roles("USER")
                 .build();
-
-        return new InMemoryUserDetailsManager(userDetails);
+        return new InMemoryUserDetailsManager(users);
     }
 
     @Bean
     public RegisteredClientRepository registeredClientRepository() {
-        RegisteredClient client = RegisteredClient.withId(UUID.randomUUID().toString())
-                .clientId("oidc-client")
+        RegisteredClient registeredClient = RegisteredClient.withId(UUID.randomUUID().toString())
+                .clientId("public-client")
                 .clientSecret("secret")
-                .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
+                .clientAuthenticationMethod(ClientAuthenticationMethod.NONE) // authoprization code + PCKE
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
-                .redirectUri("http://127.0.0.1:8081/login/oauth2/code/oidc-client")
-                .postLogoutRedirectUri("http://127.0.0.1:8080/")
+                .redirectUri("http://127.0.0.1:8081/login/aouth2/code/public-client")
+                .postLogoutRedirectUri("http:127.0.0.1:8080")
                 .scope(OidcScopes.OPENID)
                 .scope(OidcScopes.PROFILE)
-                .scope("offline_access")
-                .scope("user.read")
-                .clientSettings(ClientSettings.builder()
-                        .requireProofKey(true)
-                        .requireAuthorizationConsent(true).build())
+                .clientSettings(ClientSettings.builder().requireAuthorizationConsent(true).build())
                 .build();
 
-        return new InMemoryRegisteredClientRepository(client);
+        return new InMemoryRegisteredClientRepository(registeredClient);
     }
 
     @Bean
     public JWKSource<SecurityContext> jwkSource() {
-        KeyPair keyPair = generateRsaKey();
+        KeyPair keyPair = generateRSAKeys();
         RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
         RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-        RSAKey rsaKey = new RSAKey.Builder(publicKey)
+
+        RSAKey build = new RSAKey.Builder(publicKey)
                 .privateKey(privateKey)
                 .keyID(UUID.randomUUID().toString())
                 .build();
-        JWKSet jwkSet = new JWKSet(rsaKey);
+
+        JWKSet jwkSet = new JWKSet(build);
         return new ImmutableJWKSet<>(jwkSet);
     }
 
-    private static KeyPair generateRsaKey() {
+    private static KeyPair generateRSAKeys() {
         KeyPair keyPair;
+
         try {
             KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
             keyPairGenerator.initialize(2048);
             keyPair = keyPairGenerator.generateKeyPair();
-        } catch (Exception ex) {
-            throw new IllegalStateException(ex);
+        } catch (Exception exception) {
+            throw  new RuntimeException("failed to create keypair!");
         }
+
         return keyPair;
     }
 
@@ -190,99 +162,15 @@ public class SecurityConfig {
         return AuthorizationServerSettings.builder().build();
     }
 
-    @Bean
-    public OAuth2AuthorizationService oAuth2AuthorizationService() {
-        return new InMemoryOAuth2AuthorizationService();
-    }
-
-    @Transient
-    private static final class PublicClientRefreshTokenAuthenticationToken extends OAuth2ClientAuthenticationToken {
-
-        private PublicClientRefreshTokenAuthenticationToken(String clientId) {
-            super(clientId, ClientAuthenticationMethod.NONE, null, null);
-        }
-
-        private PublicClientRefreshTokenAuthenticationToken(RegisteredClient registeredClient) {
-            super(registeredClient, ClientAuthenticationMethod.NONE, null);
-        }
-
-    }
-
-    private static final class PublicClientRefreshTokenAuthenticationConverter implements AuthenticationConverter {
-
-        @Nullable
-        @Override
-        public Authentication convert(HttpServletRequest request) {
-            // grant_type (REQUIRED)
-            String grantType = request.getParameter(OAuth2ParameterNames.GRANT_TYPE);
-            if (!AuthorizationGrantType.REFRESH_TOKEN.getValue().equals(grantType)) {
-                return null;
-            }
-
-            // client_id (REQUIRED)
-            String clientId = request.getParameter(OAuth2ParameterNames.CLIENT_ID);
-            if (!StringUtils.hasText(clientId)) {
-                return null;
-            }
-            return new PublicClientRefreshTokenAuthenticationToken(clientId);
-        }
-
-    }
-
-    private static final class PublicClientRefreshTokenAuthenticationProvider implements AuthenticationProvider {
-        private final RegisteredClientRepository registeredClientRepository;
-
-        private PublicClientRefreshTokenAuthenticationProvider(RegisteredClientRepository registeredClientRepository) {
-            Assert.notNull(registeredClientRepository, "registeredClientRepository cannot be null");
-            this.registeredClientRepository = registeredClientRepository;
-        }
-
-        @Override
-        public Authentication authenticate(Authentication authentication) throws AuthenticationException {
-            PublicClientRefreshTokenAuthenticationToken publicClientAuthentication =
-                    (PublicClientRefreshTokenAuthenticationToken) authentication;
-
-            if (!ClientAuthenticationMethod.NONE.equals(publicClientAuthentication.getClientAuthenticationMethod())) {
-                return null;
-            }
-
-            String clientId = publicClientAuthentication.getPrincipal().toString();
-            RegisteredClient registeredClient = this.registeredClientRepository.findByClientId(clientId);
-            if (registeredClient == null) {
-                throwInvalidClient(OAuth2ParameterNames.CLIENT_ID);
-            }
-
-            if (!registeredClient.getClientAuthenticationMethods().contains(
-                    publicClientAuthentication.getClientAuthenticationMethod())) {
-                throwInvalidClient("authentication_method");
-            }
-            return new PublicClientRefreshTokenAuthenticationToken(registeredClient);
-        }
-
-        @Override
-        public boolean supports(Class<?> authentication) {
-            return PublicClientRefreshTokenAuthenticationToken.class.isAssignableFrom(authentication);
-        }
-
-        private static void throwInvalidClient(String parameterName) {
-            OAuth2Error error = new OAuth2Error(
-                    OAuth2ErrorCodes.INVALID_CLIENT,
-                    "Public client authentication failed: " + parameterName,
-                    null
-            );
-            throw new OAuth2AuthenticationException(error);
-        }
-    }
-
-    @Bean
-    OAuth2TokenCustomizer<JwtEncodingContext> jwtCustomizer() {
+    OAuth2TokenCustomizer<JwtEncodingContext> customizer() {
         return context -> {
-            if (context.getTokenType().getValue().equals(OidcParameterNames.ID_TOKEN)) {
-                Authentication principal = context.getPrincipal();
+            if(context.getTokenType().getValue().equals(OidcParameterNames.ID_TOKEN)) {
+                Authentication principle = context.getPrincipal();
                 Set<String> authorities = new HashSet<>();
-                for (GrantedAuthority authority : principal.getAuthorities()) {
+                for (GrantedAuthority authority: principle.getAuthorities()) {
                     authorities.add(authority.getAuthority());
                 }
+
                 context.getClaims().claim("authorities", authorities);
             }
         };
@@ -291,29 +179,99 @@ public class SecurityConfig {
     @Bean
     OAuth2TokenGenerator<?> tokenGenerator() {
         JwtGenerator jwtGenerator = new JwtGenerator(new NimbusJwtEncoder(jwkSource()));
-        jwtGenerator.setJwtCustomizer(jwtCustomizer());
-        OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenGenerator = new CustomRefreshTokenGenerator();
-        return new DelegatingOAuth2TokenGenerator(jwtGenerator, refreshTokenGenerator);
+        jwtGenerator.setJwtCustomizer(customizer());
+        OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenOAuth2TokenGenerator = new CustomOAuth2RefreshTokenGenerator();
+        return new DelegatingOAuth2TokenGenerator(jwtGenerator, refreshTokenOAuth2TokenGenerator);
     }
 
-    private static final class CustomRefreshTokenGenerator implements OAuth2TokenGenerator<OAuth2RefreshToken> {
+    public final class CustomOAuth2RefreshTokenGenerator implements OAuth2TokenGenerator<OAuth2RefreshToken> {
         private final StringKeyGenerator refreshTokenGenerator = new Base64StringKeyGenerator(Base64.getUrlEncoder().withoutPadding(), 96);
 
-        @Nullable
-        @Override
-        public OAuth2RefreshToken generate(OAuth2TokenContext context) {
-            if (context.getAuthorizedScopes().contains(OidcScopes.OPENID) &&
-                    !context.getAuthorizedScopes().contains("offline_access")) {
-                return null;
-            }
+        public CustomOAuth2RefreshTokenGenerator() {
+        }
 
+        @Nullable
+        public OAuth2RefreshToken generate(OAuth2TokenContext context) {
             if (!OAuth2TokenType.REFRESH_TOKEN.equals(context.getTokenType())) {
                 return null;
-            } else {
+            }  else {
                 Instant issuedAt = Instant.now();
                 Instant expiresAt = issuedAt.plus(context.getRegisteredClient().getTokenSettings().getRefreshTokenTimeToLive());
                 return new OAuth2RefreshToken(this.refreshTokenGenerator.generateKey(), issuedAt, expiresAt);
             }
+        }
+    }
+
+    private static final class PublicClientRefreshTokenAuthentication extends OAuth2ClientAuthenticationToken {
+
+        public PublicClientRefreshTokenAuthentication(String clientId) {
+            super(clientId, ClientAuthenticationMethod.NONE, null, null);
+        }
+
+        public PublicClientRefreshTokenAuthentication(RegisteredClient registeredClient) {
+            super(registeredClient, ClientAuthenticationMethod.NONE, null);
+        }
+    }
+
+    private static final class PublicClientRefreshTokenAuthenticationConverter implements AuthenticationConverter {
+
+        @Override
+        public Authentication convert(HttpServletRequest request) {
+            String grantType = request.getParameter(OAuth2ParameterNames.GRANT_TYPE);
+            if(!grantType.equals(AuthorizationGrantType.REFRESH_TOKEN.getValue())) {
+                return null;
+            }
+
+            String clientId = request.getParameter(OAuth2ParameterNames.CLIENT_ID);
+            if(!StringUtils.hasText(clientId)) {
+                return null;
+            }
+
+            return new PublicClientRefreshTokenAuthentication(clientId);
+        }
+    }
+
+    private static final class PublicClientRefreshProvider implements AuthenticationProvider {
+        private final RegisteredClientRepository registeredClientRepository;
+
+        private PublicClientRefreshProvider(RegisteredClientRepository registeredClientRepository) {
+            this.registeredClientRepository = registeredClientRepository;
+        }
+
+        @Override
+        public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+            PublicClientRefreshTokenAuthentication publicClientRefreshTokenAuthentication = (PublicClientRefreshTokenAuthentication) authentication;
+
+            if(!ClientAuthenticationMethod.NONE.equals(publicClientRefreshTokenAuthentication.getClientAuthenticationMethod())) {
+                return null;
+            }
+
+            String clientId = publicClientRefreshTokenAuthentication.getPrincipal().toString();
+            RegisteredClient registeredClient = registeredClientRepository.findByClientId(clientId);
+
+            if(registeredClient == null) {
+                throw new OAuth2AuthenticationException(new OAuth2Error(
+                        OAuth2ErrorCodes.INVALID_CLIENT,
+                        "client is not valid",
+                        null
+                ));
+            }
+
+            if(!registeredClient.getClientAuthenticationMethods().contains(
+                    publicClientRefreshTokenAuthentication.getClientAuthenticationMethod()
+            )) {
+                throw new OAuth2AuthenticationException(new OAuth2Error(
+                        OAuth2ErrorCodes.INVALID_CLIENT,
+                        "authentication_method is not register with client",
+                        null
+                ));
+            }
+            return new PublicClientRefreshTokenAuthentication(registeredClient);
+        }
+
+        @Override
+        public boolean supports(Class<?> authentication) {
+            return PublicClientRefreshTokenAuthentication.class.isAssignableFrom(authentication);
         }
     }
 }
