@@ -1,5 +1,7 @@
 package com.basic.oauth.config;
 
+import com.basic.oauth.model.RSAKeyPair;
+import com.basic.oauth.repository.RSAKeyRepository;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,6 +15,11 @@ import org.springframework.security.oauth2.server.authorization.client.Registere
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.springframework.security.provisioning.UserDetailsManager;
 
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -20,9 +27,9 @@ import java.util.UUID;
 public class InitData {
 
     @Bean
-    public ApplicationRunner applicationRunner(RegisteredClientRepository registeredClientRepository, UserDetailsManager userDetailsManager) {
+    public ApplicationRunner applicationRunner(RegisteredClientRepository registeredClientRepository, UserDetailsManager userDetailsManager, RSAKeyRepository rsaKeyRepository) {
         return args -> {
-            if(Objects.isNull(registeredClientRepository.findByClientId("public-client"))) {
+            if (Objects.isNull(registeredClientRepository.findByClientId("public-client"))) {
                 RegisteredClient registeredClient = RegisteredClient.withId(UUID.randomUUID().toString())
                         .clientId("public-client")
                         .clientSecret("secret")
@@ -39,7 +46,7 @@ public class InitData {
                 registeredClientRepository.save(registeredClient);
             }
 
-            if(!userDetailsManager.userExists("user")) {
+            if (!userDetailsManager.userExists("user")) {
                 UserDetails user = User.withDefaultPasswordEncoder()
                         .username("user")
                         .password("password")
@@ -49,6 +56,33 @@ public class InitData {
                 userDetailsManager.createUser(user);
             }
 
+            if (rsaKeyRepository.findAllKeys().isEmpty()) {
+                var key = generateRSAKeys();
+                rsaKeyRepository.save(
+                        new RSAKeyPair(
+                                UUID.randomUUID().toString(),
+                                (RSAPrivateKey) key.getPrivate(),
+                                (RSAPublicKey) key.getPublic(),
+                                OffsetDateTime.now()
+                        )
+                );
+            }
+
         };
     }
+
+    private static KeyPair generateRSAKeys() {
+        KeyPair keyPair;
+
+        try {
+            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+            keyPairGenerator.initialize(2048);
+            keyPair = keyPairGenerator.generateKeyPair();
+        } catch (Exception exception) {
+            throw new RuntimeException("failed to create keypair!");
+        }
+
+        return keyPair;
+    }
+
 }

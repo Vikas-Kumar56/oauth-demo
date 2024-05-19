@@ -30,6 +30,7 @@ import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.core.oidc.OidcScopes;
 import org.springframework.security.oauth2.core.oidc.endpoint.OidcParameterNames;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
@@ -75,7 +76,6 @@ public class SecurityConfig {
                     authentication.authenticationConverter(new PublicClientRefreshTokenAuthenticationConverter());
                     authentication.authenticationProvider(new PublicClientRefreshProvider(registeredClientRepository));
                 })
-                .tokenGenerator(tokenGenerator())
                 .oidc(Customizer.withDefaults()); // enable open id connect 1.0
 
         httpSecurity.exceptionHandling(exception -> {
@@ -118,20 +118,20 @@ public class SecurityConfig {
         return new JdbcRegisteredClientRepository(jdbcTemplate);
     }
 
-    @Bean
-    public JWKSource<SecurityContext> jwkSource() {
-        KeyPair keyPair = generateRSAKeys();
-        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
-        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-
-        RSAKey build = new RSAKey.Builder(publicKey)
-                .privateKey(privateKey)
-                .keyID(UUID.randomUUID().toString())
-                .build();
-
-        JWKSet jwkSet = new JWKSet(build);
-        return new ImmutableJWKSet<>(jwkSet);
-    }
+//    @Bean
+//    public JWKSource<SecurityContext> jwkSource() {
+//        KeyPair keyPair = generateRSAKeys();
+//        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
+//        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
+//
+//        RSAKey build = new RSAKey.Builder(publicKey)
+//                .privateKey(privateKey)
+//                .keyID(UUID.randomUUID().toString())
+//                .build();
+//
+//        JWKSet jwkSet = new JWKSet(build);
+//        return new ImmutableJWKSet<>(jwkSet);
+//    }
 
     private static KeyPair generateRSAKeys() {
         KeyPair keyPair;
@@ -172,8 +172,13 @@ public class SecurityConfig {
     }
 
     @Bean
-    OAuth2TokenGenerator<?> tokenGenerator() {
-        JwtGenerator jwtGenerator = new JwtGenerator(new NimbusJwtEncoder(jwkSource()));
+    NimbusJwtEncoder nimbusJwtEncoder(JWKSource<SecurityContext> jwkSource) {
+        return new NimbusJwtEncoder(jwkSource);
+    }
+
+    @Bean
+    OAuth2TokenGenerator<?> tokenGenerator(JwtEncoder jwtEncode) {
+        JwtGenerator jwtGenerator = new JwtGenerator(jwtEncode);
         jwtGenerator.setJwtCustomizer(customizer());
         OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenOAuth2TokenGenerator = new CustomOAuth2RefreshTokenGenerator();
         return new DelegatingOAuth2TokenGenerator(jwtGenerator, refreshTokenOAuth2TokenGenerator);
