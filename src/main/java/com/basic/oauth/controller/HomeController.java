@@ -11,4 +11,9 @@ public class HomeController {
     public String index() {
         return SecurityContextHolder.getContext().getAuthentication().getPrincipal().toString();
     }
+
+    @GetMapping("/hello")
+    public String sayHello() {
+        return "Hello Works!";
+    }
 }
